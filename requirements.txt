@@ -1,0 +1,4 @@
+click==7.0
+tinydb==3.13.0
+requests==v2.21.0
+parsel==v1.3.1

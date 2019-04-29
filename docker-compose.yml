@@ -1,0 +1,7 @@
+version: '2'
+services:
+    simple-crawler:
+        build: .
+        image: simple-crawler
+        volumes:
+            - ./src:/src
