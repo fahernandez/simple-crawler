@@ -5,15 +5,17 @@ from pathlib import Path
 import requests
 from parsel import Selector
 import operator
-import hashlib
 import validators
+import csv
 
-DB_LOCATION = "/src/data.json"
+DATA_DB_LOCATION = "/src/data.json"
+ADMIN_DB_LOCATION = "/src/admin.json"
+URL_LOCATION = "/src/url.txt"
+FILE_LOCATION = '/src/data/'
 
-max_downloaded_bytes = 0
-downloaded_bytes = 0
-max_deep_level = 0
-order = 0
+# Local variables
+max_bytes_to_download = 0
+max_levels = 0
 
 allowed_mime_types = {
   'text/html': '.html',
@@ -42,55 +44,60 @@ allowed_mime_types = {
 @click.option('--levels', default=20, help='Maximum deeper level to be reach while crawling.')
 @click.option('--restart', default=False, type=bool,  help='Restart the crawling process.')
 
-
 def main(gigabytes, url, levels, restart):
-    global max_downloaded_bytes
-    global max_deep_level
-    max_downloaded_bytes = gigabytes * 1000000000
-    max_deep_level = levels
+    global max_bytes_to_download
+    global max_levels
+    max_bytes_to_download = gigabytes * 1000000000
+    max_levels = levels
 
+    # prune db to improve query time
     """Simple program that craws web pagessss."""
-    db = TinyDB(DB_LOCATION)
+
+    db = TinyDB(DATA_DB_LOCATION)
+
     if restart:
         print("Starting a new site crawling...")
-        os.remove(DB_LOCATION)
-        Path(DB_LOCATION).touch()
-        db = TinyDB(DB_LOCATION)
+        os.remove(DATA_DB_LOCATION)
+        Path(DATA_DB_LOCATION).touch()
+        os.remove(URL_LOCATION)
+        Path(URL_LOCATION).touch()
+        os.remove(ADMIN_DB_LOCATION)
+        Path(ADMIN_DB_LOCATION).touch()
 
-        hash = hashlib.md5(url.encode())
-        db.insert({'hash':hash.hexdigest(), 'url': url, 'downloaded': False, 'omit':False, 'deep':1, 'order':1, 'size':0, 'mime':''})
+        db = TinyDB(DATA_DB_LOCATION)
+        db.insert({'sequence':0, 'url': url, 'downloaded': False, 'omit':False, 'deep':1, 'order':1, 'size':0, 'mime':''})
     else:
         print("Continuing site crawling...")
 
-    update_downloaded(db)
+    prunedb(db)
+    update_admin_fields()
     verify_preconditions(db)
 
-def update_downloaded(db):
-    global downloaded_bytes
-    doc = Query()
-    docs = db.search(doc.downloaded == True)
-    for d in docs:
-        downloaded_bytes += d['size']
+def update_admin_fields():
+    db = TinyDB(ADMIN_DB_LOCATION)
+    admin = db.search(Query()['admin'] == True)
+    if len(admin) == 0:
+        db.insert({'admin': True, 'sequence': 0, 'bytes_downloaded': 0, 'order':0})
+
+    admin = db.search(Query()['admin'] == True)[0]
+    print("Last downloaded document {}".format(admin['sequence']))
+    print("New document order {}".format(admin['order']))
+    print("Bytes downloaded {}".format(admin['bytes_downloaded']))
 
 def verify_preconditions(db):
-    global order
-    order = 0
-
     doc = Query()
     pending = db.search((doc.downloaded == False) & (doc.omit == False))
     if len(pending) != 0:
-        pending = sorted(pending, key = lambda i: (i['deep'], i['order']))
-        next = pending[0]
+        next = sorted(pending, key = lambda i: (i['deep'], i['order']))[0]
 
         doc = Query()
-        next_docs = db.search((doc.downloaded == False) & (doc.omit == False) & (doc.deep == (next['deep'] + 1)))
-        if len(next_docs) != 0:
-            next_docs = sorted(next_docs, key=lambda k: k['order'], reverse=True)
-            last = next_docs[0]
-            order = last['order']
+        next_level_docs = db.search((doc.downloaded == False) & (doc.omit == False) & (doc.deep == (next['deep'] + 1)))
+        if len(next_level_docs) == 0:
+            TinyDB(ADMIN_DB_LOCATION).update({'order': 0}, Query()['admin'] == True)
 
-        if downloaded_bytes > max_downloaded_bytes or next['deep'] > max_deep_level:
-            export(db)
+        admin = TinyDB(ADMIN_DB_LOCATION).search(Query()['admin'] == True)[0]
+        if admin['bytes_downloaded'] > max_bytes_to_download or next['deep'] > max_levels:
+            prunedb(db)
         else:
             craw(db, next)
     else:
@@ -124,53 +131,77 @@ def craw(db, next):
         omit(db,next)
 
 def update_urls(db, next, response):
-    global order
-
     selector = Selector(response.text)
     href_links = selector.xpath('//a/@href').getall()
 
+    order = TinyDB(ADMIN_DB_LOCATION).search(Query()['admin'] == True)[0]['order']
     for l in href_links:
         if not validators.url(l):
           continue
-        hash = hashlib.md5(l.encode())
-        digest = hash.hexdigest()
 
         doc = Query()
-        process = db.search(doc.hash == digest)
+        process = db.search(doc.url == l)
         if len(process) != 0:
             continue
         else:
             order += 1
-            db.insert({'hash': digest, 'url': str(l), 'downloaded': False, 'omit': False, 'deep': next['deep'] + 1, 'order': order, 'size': 0,'mime': ''})
+            db.insert({'sequence':0, 'url': str(l), 'downloaded': False, 'omit': False, 'deep': next['deep'] + 1, 'order': order, 'size': 0,'mime': ''})
+
+    TinyDB(ADMIN_DB_LOCATION).update({'order': order}, Query()['admin'] == True)
 
 def save(db, next, response, mime):
-    global downloaded_bytes
-    file_name = "/src/data/{}{}".format(next["hash"], allowed_mime_types[mime])
+    admin = TinyDB(ADMIN_DB_LOCATION).search(Query()['admin'] == True)[0]
+    sequence = admin['sequence']
+    bytes_downloaded = admin['bytes_downloaded']
+
+    sequence += 1
+
+    file_name = "{}{}{}".format(FILE_LOCATION,sequence, allowed_mime_types[mime])
     print("Saving to {}".format(file_name))
 
-    file = open(file_name, 'w')
-    file.write(response.text)
+    file = open(file_name, 'wb')
+    file.write(response.content)
     file.close()
 
     stats = os.stat(file_name)
-    dowloaded = stats.st_size
-    downloaded_bytes += dowloaded
+    bytes_downloaded += stats.st_size
 
-    print("Downloaded {} new bytes, total {} of {}".format(dowloaded, downloaded_bytes, max_downloaded_bytes))
+    print("Downloaded {} new bytes, total {} of {}".format(stats.st_size, bytes_downloaded, max_bytes_to_download))
 
     doc = Query()
-    db.update({'omit': False, 'downloaded': True, 'mime': mime, 'size':dowloaded}, doc.url == next['url'])
-
+    db.update({'sequence':sequence, 'omit': False, 'downloaded': True, 'mime': mime, 'size':stats.st_size}, doc_ids = [next.doc_id])
+    TinyDB(ADMIN_DB_LOCATION).update({'sequence': sequence, 'bytes_downloaded':bytes_downloaded}, Query()['admin'] == True)
     return
 
 def omit(db, next):
     print("Omitting url {}".format(next['url']))
-    doc = Query()
-    db.update({'omit': True}, doc.url == next['url'])
+    db.update({'omit': True}, doc_ids = [next.doc_id])
     verify_preconditions(db)
     return
 
-def export(db):
+def prunedb(db):
+    print("Pruning db to reduce size")
+    doc = Query()
+    # save and delete downloaded documents
+    downloaded = db.search(doc.downloaded == True)
+    if len(downloaded) != 0:
+        writer = csv.writer(open(URL_LOCATION, "a"))
+        ids = []
+        for d in downloaded:
+            writer.writerow([d['url'], d['mime'], "{}{}".format(d['sequence'], allowed_mime_types[d['mime']])])
+            ids.append(d.doc_id)
+        print("Inserting {} new documents".format(len(ids)))
+        db.remove(doc_ids=ids)
+
+    # remove omitted documents
+    omitted = db.search(doc.omit == True)
+    if len(omitted) != 0:
+        ids = []
+        for d in omitted:
+            ids.append(d.doc_id)
+        print("Removing {} omitted documents".format(len(ids)))
+        db.remove(doc_ids=ids)
+
     return
 
 if __name__ == "__main__":
