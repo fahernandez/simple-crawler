@@ -2,6 +2,6 @@ version: '2'
 services:
     simple-crawler:
         build: .
-        image: simple-crawler
+        image: fahernandez/simple-crawler:latest
         volumes:
             - ./src:/src
