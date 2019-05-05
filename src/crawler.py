@@ -72,6 +72,7 @@ def main(gigabytes, url, levels, restart):
     prunedb(db)
     update_admin_fields()
     verify_preconditions(db)
+    return
 
 def update_admin_fields():
     db = TinyDB(ADMIN_DB_LOCATION)
@@ -97,9 +98,11 @@ def verify_preconditions(db):
 
         admin = TinyDB(ADMIN_DB_LOCATION).search(Query()['admin'] == True)[0]
         if admin['bytes_downloaded'] > max_bytes_to_download or next['deep'] > max_levels:
-            prunedb(db)
+            export(db)
+            return
         else:
             craw(db, next)
+            return
     else:
         print ('No more documents to search')
 
@@ -107,46 +110,66 @@ def craw(db, next):
     print("--------Getting url {}".format(next['url']))
 
     try:
+        doc = Query()
+        process = db.search(doc.downloaded == True)
+        process = list(filter(lambda d: d['url'] == next['url'] or
+                                        d['url'] == (next['url']+"/") or
+                                        d['url'] == next['url'].rstrip('/'), process)
+                       )
+        if len(process) != 0:
+            omit(db, next)
+            verify_preconditions(db)
+            return
+
         response = requests.get(next['url'])
         print("Response status {}".format(response.status_code))
         if response.status_code != 200:
             omit(db, next)
+            verify_preconditions(db)
             return
 
         content = response.headers['content-type'].split(";")
         if len(content) == 0:
             omit(db, next)
+            verify_preconditions(db)
             return
 
         mime = content[0]
         print("Mime type {}".format(mime))
         if mime not in allowed_mime_types:
             omit(db, next)
+            verify_preconditions(db)
             return
 
         save(db, next, response, mime)
         update_urls(db, next, response)
+        prunedb(db)
         verify_preconditions(db)
-    except ConnectionError:
+        return
+    except Exception:
         omit(db,next)
+        verify_preconditions(db)
+        return
 
 def update_urls(db, next, response):
     selector = Selector(response.text)
     href_links = selector.xpath('//a/@href').getall()
 
     order = TinyDB(ADMIN_DB_LOCATION).search(Query()['admin'] == True)[0]['order']
+    count = 0
+    doc = Query()
     for l in href_links:
         if not validators.url(l):
           continue
 
-        doc = Query()
         process = db.search(doc.url == l)
         if len(process) != 0:
             continue
         else:
             order += 1
+            count +=1
             db.insert({'sequence':0, 'url': str(l), 'downloaded': False, 'omit': False, 'deep': next['deep'] + 1, 'order': order, 'size': 0,'mime': ''})
-
+    print("{} new urls added".format(count))
     TinyDB(ADMIN_DB_LOCATION).update({'order': order}, Query()['admin'] == True)
 
 def save(db, next, response, mime):
@@ -168,7 +191,6 @@ def save(db, next, response, mime):
 
     print("Downloaded {} new bytes, total {} of {}".format(stats.st_size, bytes_downloaded, max_bytes_to_download))
 
-    doc = Query()
     db.update({'sequence':sequence, 'omit': False, 'downloaded': True, 'mime': mime, 'size':stats.st_size}, doc_ids = [next.doc_id])
     TinyDB(ADMIN_DB_LOCATION).update({'sequence': sequence, 'bytes_downloaded':bytes_downloaded}, Query()['admin'] == True)
     return
@@ -176,25 +198,12 @@ def save(db, next, response, mime):
 def omit(db, next):
     print("Omitting url {}".format(next['url']))
     db.update({'omit': True}, doc_ids = [next.doc_id])
-    verify_preconditions(db)
     return
 
 def prunedb(db):
     print("Pruning db to reduce size")
-    doc = Query()
-    # save and delete downloaded documents
-    downloaded = db.search(doc.downloaded == True)
-    if len(downloaded) != 0:
-        writer = csv.writer(open(URL_LOCATION, "a"))
-        ids = []
-        for d in downloaded:
-            writer.writerow([d['url'], d['mime'], "{}{}".format(d['sequence'], allowed_mime_types[d['mime']])])
-            ids.append(d.doc_id)
-        print("Inserting {} new documents".format(len(ids)))
-        db.remove(doc_ids=ids)
-
     # remove omitted documents
-    omitted = db.search(doc.omit == True)
+    omitted = db.search(Query()['omit'] == True)
     if len(omitted) != 0:
         ids = []
         for d in omitted:
@@ -204,6 +213,16 @@ def prunedb(db):
 
     return
 
+def export(db):
+    # save and delete downloaded documents
+    downloaded = db.search(Query()['downloaded'] == True)
+    if len(downloaded) != 0:
+        writer = csv.writer(open(URL_LOCATION, "a"))
+        ids = []
+        for d in downloaded:
+            writer.writerow([d['url'], d['mime'], "{}{}".format(d['sequence'], allowed_mime_types[d['mime']])])
+            ids.append(d.doc_id)
+        print("Inserting {} new documents".format(len(ids)))
+
 if __name__ == "__main__":
     main()
-
