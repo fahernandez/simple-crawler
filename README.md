@@ -14,7 +14,8 @@ git clone https://github.com/fahernandez/simple-crawler
 ```
 2. Execute 
 ```
-docker run -ti -v $PWD/src:/src fahernandez/simple-crawler:latest --levels 20 --gigabytes 2 --restart=true
+cd simple-crawler
+docker run -ti -v $PWD/src:/src fahernandez/simple-crawler:latest --levels=20 --gigabytes=2 --restart=true
 ```
 
 # Options
