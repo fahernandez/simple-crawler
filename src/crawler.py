@@ -10,7 +10,7 @@ import csv
 
 DATA_DB_LOCATION = "/src/data.json"
 ADMIN_DB_LOCATION = "/src/admin.json"
-URL_LOCATION = "/src/url.txt"
+URL_LOCATION = "/src/data/url.txt"
 FILE_LOCATION = '/src/data/'
 
 # Local variables
