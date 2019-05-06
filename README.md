@@ -1,12 +1,21 @@
 # Simple crawler
-Information retrival simple crawler project. This script will craw the web using an url
+Information retrieval simple crawler project. This script will craw the web using an url
 
 ## Requirements
-1. This project will requires install docker locally.
+1. Install docker.
 - [Docker](https://docs.docker.com/engine/installation/) 
+2. Install git.
+- [Git](https://gist.github.com/derhuerst/1b15ff4652a867391f03)
 
 # How to run the proyect
-docker run -ti -v $PWD/src:/src fahernandez/simple-crawler --levels 20 --gigabytes 2
+1. Clone this project.
+```
+git clone https://github.com/fahernandez/simple-crawler
+```
+2. Execute 
+```
+docker run -ti -v $PWD/src:/src fahernandez/simple-crawler:latest --levels 20 --gigabytes 2 --restart=true
+```
 
 # Options
 ```
